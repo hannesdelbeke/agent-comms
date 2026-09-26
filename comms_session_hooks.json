@@ -1,0 +1,49 @@
+{
+  "_comment_not_a_settings_file": "Paste-ready hook blocks for comms_session.py. An agent cannot add these to ~/.claude/settings.json itself: the auto mode classifier refuses it as [Self-Modification], which is a policy denial rather than an outage, so it is refused identically every time and is not worth retrying. Add each block as a NEW entry in the matching array of ~/.claude/settings.json, alongside the entries already there, rather than replacing them. settings.json itself takes no comments, so drop this _comment key when pasting.",
+
+  "SessionStart": {
+    "hooks": [
+      {
+        "type": "command",
+        "command": "s=\"$HOME/repos/agent-comms/comms_session.py\"; [ -f \"$s\" ] || exit 0; /usr/bin/python3 \"$s\" --register; exit 0",
+        "timeout": 15,
+        "statusMessage": "comms register"
+      }
+    ]
+  },
+
+  "_comment_UserPromptSubmit": "This is the delivery half, and the one that makes the bus reach a live session. A hook's stdout is added to the session's context, so mail from another machine or another vendor appears in front of this session at its next turn. Each message is printed once and moved to done/.",
+
+  "UserPromptSubmit": {
+    "hooks": [
+      {
+        "type": "command",
+        "command": "s=\"$HOME/repos/agent-comms/comms_session.py\"; [ -f \"$s\" ] || exit 0; /usr/bin/python3 \"$s\" --deliver; exit 0",
+        "timeout": 15,
+        "statusMessage": "comms deliver"
+      }
+    ]
+  },
+
+  "PreCompact": {
+    "hooks": [
+      {
+        "type": "command",
+        "command": "s=\"$HOME/repos/agent-comms/comms_session.py\"; [ -f \"$s\" ] || exit 0; /usr/bin/python3 \"$s\" --refresh; exit 0",
+        "timeout": 15,
+        "statusMessage": "comms refresh"
+      }
+    ]
+  },
+
+  "SessionEnd": {
+    "hooks": [
+      {
+        "type": "command",
+        "command": "s=\"$HOME/repos/agent-comms/comms_session.py\"; [ -f \"$s\" ] || exit 0; /usr/bin/python3 \"$s\" --retire; exit 0",
+        "timeout": 15,
+        "statusMessage": "comms retire"
+      }
+    ]
+  }
+}
