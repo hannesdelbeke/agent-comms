@@ -197,39 +197,45 @@ def describe(payload: dict) -> str:
     return f"{kind} claude code session in {Path(cwd).name}"
 
 
-KNOWN_SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "csh", "tcsh"}
-
-
-def claude_pid() -> int:
-    """The hook's parent is the Claude Code process that fired it.
-
-    When hooks run inside a subshell wrapper (`sh -c ...`), os.getppid() captures
-    the ephemeral shell process rather than the persistent caller process (e.g.
-    Claude Code or agent CLI), causing --live to report DEAD as soon as the shell
-    exits. If the parent process basename is a known shell, inspect and traverse
-    up to the grandparent process. Fall back safely to os.getppid() if ps fails
-    or times out.
-    """
-    parent = os.getppid()
+def _ps_field(pid: int, field: str) -> str:
     try:
         out = subprocess.run(
-            ["ps", "-o", "ppid=,comm=", "-p", str(parent)],
+            ["ps", "-o", f"{field}=", "-p", str(pid)],
             capture_output=True,
             text=True,
             timeout=5,
         )
-        if out.returncode == 0 and out.stdout.strip():
-            parts = out.stdout.strip().split(None, 1)
-            if len(parts) == 2:
-                gppid_str, comm = parts
-                base = os.path.basename(comm.strip()).lstrip("-").lower()
-                if base in KNOWN_SHELLS:
-                    gppid = int(gppid_str)
-                    if gppid > 0:
-                        return gppid
-    except (OSError, ValueError, subprocess.SubprocessError):
+        if out.returncode == 0:
+            return out.stdout.strip()
+    except (OSError, subprocess.SubprocessError):
         pass
-    return parent
+    return ""
+
+
+def _is_agent_proc(pid: int) -> bool:
+    cmd = _ps_field(pid, "command") or _ps_field(pid, "comm")
+    if not cmd:
+        return False
+    parts = cmd.split()
+    if not parts:
+        return False
+    base = os.path.basename(parts[0].replace("\\", "/"))
+    return base in ("claude", "claude.exe", "agy", "antigravity", "gemini")
+
+
+def claude_pid() -> int:
+    """Walk up process ancestry (up to 8 levels) to locate the agent process."""
+    curr = os.getppid()
+    for _ in range(8):
+        if curr <= 1:
+            break
+        if _is_agent_proc(curr):
+            return curr
+        ppid_str = _ps_field(curr, "ppid")
+        if not ppid_str.isdigit():
+            break
+        curr = int(ppid_str)
+    return 0
 
 
 def parse_registration(path: Path) -> dict[str, str]:
@@ -305,9 +311,11 @@ def cmd_register(payload: dict, root: Path) -> int:
         f"host: {host_raw()}",
         f"cwd: {payload.get('cwd') or os.getcwd()}",
         f"seen: {stamp()}",
-        f"pid: {claude_pid()}",
-        f"session: {session_id(payload)}",
     ]
+    pid = claude_pid()
+    if pid:
+        body.append(f"pid: {pid}")
+    body.append(f"session: {session_id(payload)}")
     try:
         reg.write_text("\n".join(body) + "\n", encoding="utf-8")
     except OSError as exc:
@@ -343,7 +351,11 @@ def cmd_refresh(payload: dict, root: Path) -> int:
         return cmd_register(payload, root)
     fields = parse_registration(reg)
     fields["seen"] = stamp()
-    fields["pid"] = str(claude_pid())
+    pid = claude_pid()
+    if pid:
+        fields["pid"] = str(pid)
+    else:
+        fields.pop("pid", None)
     order = ["name", "role", "host", "cwd", "seen", "pid", "session"]
     lines = [f"{k}: {fields[k]}" for k in order if k in fields]
     lines += [f"{k}: {v}" for k, v in fields.items() if k not in order]

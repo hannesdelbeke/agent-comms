@@ -40,24 +40,33 @@ if [ -n "$BUS" ] && [ "$BUS" != "--hooks" ]; then
   echo "✓ Configured default_bus=$BUS"
 fi
 
-# 4. Generate/update repo comms_session_hooks.json with actual repo path
-sed -i -e "s|s=\"[^\"]*comms_session\.py\"|s=\"$REPO_DIR/comms_session.py\"|g" "$REPO_DIR/comms_session_hooks.json"
-echo "✓ Configured comms_session_hooks.json target to $REPO_DIR/comms_session.py"
-
-# 5. Optional hook installation into ~/.claude/settings.json
+# 4. Optional hook installation into ~/.claude/settings.json
 INSTALL_HOOKS=0
 for arg in "$@"; do
   [ "$arg" = "--hooks" ] && INSTALL_HOOKS=1
 done
 
 if [ "$INSTALL_HOOKS" -eq 1 ]; then
-  python3 - <<EOF
+  PYTHON_BIN="python3"
+  if ! command -v python3 >/dev/null 2>&1; then
+    if command -v python >/dev/null 2>&1; then
+      PYTHON_BIN="python"
+    else
+      echo "Error: python3 or python required to install hooks" >&2
+      exit 1
+    fi
+  fi
+
+  "$PYTHON_BIN" - "$REPO_DIR" <<'EOF'
 import json
 import pathlib
+import re
 import sys
 
+repo_dir = pathlib.Path(sys.argv[1]).resolve()
+script_path = str(repo_dir / "comms_session.py")
+hooks_path = repo_dir / "comms_session_hooks.json"
 settings_path = pathlib.Path.home() / ".claude/settings.json"
-hooks_path = pathlib.Path("$REPO_DIR/comms_session_hooks.json")
 
 if not hooks_path.exists():
     print(f"Error: {hooks_path} not found", file=sys.stderr)
@@ -73,19 +82,72 @@ if settings_path.exists() and settings_path.stat().st_size > 0:
 else:
     data = {}
 
-hooks_src = json.loads(hooks_path.read_text(encoding="utf-8"))
+try:
+    hooks_src = json.loads(hooks_path.read_text(encoding="utf-8"))
+except Exception as e:
+    print(f"Error: could not parse {hooks_path}: {e}", file=sys.stderr)
+    sys.exit(1)
 
+# Clean legacy top-level hook keys if written by older install.sh
+for event in ("SessionStart", "UserPromptSubmit", "PreCompact", "SessionEnd"):
+    if event in data and isinstance(data[event], dict) and "hooks" in data[event]:
+        data[event]["hooks"] = [
+            h for h in data[event]["hooks"]
+            if not (isinstance(h, dict) and "comms_session.py" in h.get("command", ""))
+        ]
+        if not data[event]["hooks"]:
+            del data[event]
+
+# Claude Code reads settings["hooks"][<event>] as a list of matcher groups: [{"hooks": [...]}]
+hooks_dict = data.setdefault("hooks", {})
 for event in ("SessionStart", "UserPromptSubmit", "PreCompact", "SessionEnd"):
     if event not in hooks_src:
         continue
-    target_event = data.setdefault(event, {})
-    target_hooks = target_event.setdefault("hooks", [])
-    src_hook = hooks_src[event]["hooks"][0]
-    
-    # Check if identical command already exists
-    exists = any(h.get("command") == src_hook.get("command") for h in target_hooks)
-    if not exists:
-        target_hooks.append(src_hook)
+    src_hook = dict(hooks_src[event]["hooks"][0])
+    # Replace path in-memory without modifying comms_session_hooks.json on disk
+    src_hook["command"] = re.sub(
+        r's="[^"]*comms_session\.py"',
+        f's="{script_path}"',
+        src_hook.get("command", "")
+    )
+
+    event_groups = hooks_dict.setdefault(event, [])
+    if not isinstance(event_groups, list):
+        event_groups = []
+        hooks_dict[event] = event_groups
+
+    updated = False
+    for group in event_groups:
+        if not isinstance(group, dict):
+            continue
+        g_hooks = group.setdefault("hooks", [])
+        if not isinstance(g_hooks, list):
+            continue
+        for i, h in enumerate(g_hooks):
+            if isinstance(h, dict) and "comms_session.py" in h.get("command", ""):
+                g_hooks[i] = src_hook
+                updated = True
+                break
+        if updated:
+            # Deduplicate any remaining comms_session hooks in this group
+            group["hooks"] = [
+                h for idx, h in enumerate(g_hooks)
+                if idx == i or not (isinstance(h, dict) and "comms_session.py" in h.get("command", ""))
+            ]
+            break
+
+    if not updated:
+        event_groups.append({"hooks": [src_hook]})
+
+    # Clean any duplicate comms_session hooks across other groups in this event
+    for group in event_groups:
+        if not isinstance(group, dict) or "hooks" not in group:
+            continue
+        group["hooks"] = [
+            h for h in group["hooks"]
+            if h is src_hook or not (isinstance(h, dict) and "comms_session.py" in h.get("command", ""))
+        ]
+    event_groups[:] = [g for g in event_groups if isinstance(g, dict) and g.get("hooks")]
 
 settings_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 print(f"✓ Installed lifecycle hooks into {settings_path}")

@@ -5,7 +5,7 @@
     "hooks": [
       {
         "type": "command",
-        "command": "s=\"$HOME/repos/agent-comms/comms_session.py\"; [ -f \"$s\" ] || exit 0; exec /usr/bin/python3 \"$s\" --register",
+        "command": "s=\"$HOME/repos/agent-comms/comms_session.py\"; [ -f \"$s\" ] || exit 0; /usr/bin/python3 \"$s\" --register 2>/dev/null || python3 \"$s\" --register 2>/dev/null || python \"$s\" --register 2>/dev/null || exit 0; exit 0",
         "timeout": 15,
         "statusMessage": "comms register"
       }
@@ -18,7 +18,7 @@
     "hooks": [
       {
         "type": "command",
-        "command": "s=\"$HOME/repos/agent-comms/comms_session.py\"; [ -f \"$s\" ] || exit 0; exec /usr/bin/python3 \"$s\" --deliver",
+        "command": "s=\"$HOME/repos/agent-comms/comms_session.py\"; [ -f \"$s\" ] || exit 0; /usr/bin/python3 \"$s\" --deliver 2>/dev/null || python3 \"$s\" --deliver 2>/dev/null || python \"$s\" --deliver 2>/dev/null || exit 0; exit 0",
         "timeout": 15,
         "statusMessage": "comms deliver"
       }
@@ -29,7 +29,7 @@
     "hooks": [
       {
         "type": "command",
-        "command": "s=\"$HOME/repos/agent-comms/comms_session.py\"; [ -f \"$s\" ] || exit 0; exec /usr/bin/python3 \"$s\" --refresh",
+        "command": "s=\"$HOME/repos/agent-comms/comms_session.py\"; [ -f \"$s\" ] || exit 0; /usr/bin/python3 \"$s\" --refresh 2>/dev/null || python3 \"$s\" --refresh 2>/dev/null || python \"$s\" --refresh 2>/dev/null || exit 0; exit 0",
         "timeout": 15,
         "statusMessage": "comms refresh"
       }
@@ -40,7 +40,7 @@
     "hooks": [
       {
         "type": "command",
-        "command": "s=\"$HOME/repos/agent-comms/comms_session.py\"; [ -f \"$s\" ] || exit 0; exec /usr/bin/python3 \"$s\" --retire",
+        "command": "s=\"$HOME/repos/agent-comms/comms_session.py\"; [ -f \"$s\" ] || exit 0; /usr/bin/python3 \"$s\" --retire 2>/dev/null || python3 \"$s\" --retire 2>/dev/null || python \"$s\" --retire 2>/dev/null || exit 0; exit 0",
         "timeout": 15,
         "statusMessage": "comms retire"
       }
