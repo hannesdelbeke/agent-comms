@@ -11,6 +11,7 @@
 # Configuration & settings:
 #   comms config set default_bus project-a    # sets default bus in ~/.config/agentcomms/config
 #   comms config set git 1                    # enables git sync mode
+#   comms config set notify "..."             # command to run when mail is sent
 #   comms config list                         # prints active configuration
 #
 # Environment overrides (legacy / fallback):
@@ -46,7 +47,10 @@ get_config() {
   [ -f "$CONFIG_FILE" ] || return 1
   key="$1"
   val=$(sed -n "s/^[[:space:]]*$key[[:space:]]*=[[:space:]]*//p" "$CONFIG_FILE" 2>/dev/null | head -n 1 | tr -d '\r')
-  val=$(echo "$val" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
+  case "$val" in
+    \"*\") val="${val#\"}"; val="${val%\"}" ;;
+    "'"*"'") val="${val#"'"}" ; val="${val%"'"}" ;;
+  esac
   [ -n "$val" ] || return 1
   echo "$val"
 }
@@ -133,6 +137,7 @@ CFG_DEFAULT_BUS=$(get_config default_bus 2>/dev/null || true)
 CFG_ROOT=$(get_config root 2>/dev/null || true)
 CFG_GIT=$(get_config git 2>/dev/null || true)
 CFG_ME=$(get_config me 2>/dev/null || true)
+CFG_NOTIFY=$(get_config notify 2>/dev/null || true)
 
 BUS="${CLI_BUS:-${COMMS_BUS:-$CFG_DEFAULT_BUS}}"
 if [ -n "$CLI_BUS" ]; then
@@ -325,10 +330,11 @@ cmd_config() {
         echo "no config file found ($CONFIG_FILE)"
       fi
       echo "resolved settings:"
-      echo "  BUS:  ${BUS:-<unset>}"
-      echo "  ROOT: $ROOT"
-      echo "  ME:   ${ME:-<unset>}"
-      echo "  GIT:  $GIT"
+      echo "  BUS:    ${BUS:-<unset>}"
+      echo "  ROOT:   $ROOT"
+      echo "  ME:     ${ME:-<unset>}"
+      echo "  GIT:    $GIT"
+      echo "  NOTIFY: ${COMMS_NOTIFY:-${CFG_NOTIFY:-<unset>}}"
       ;;
     get)
       key="${2:-}"; [ -n "$key" ] || die "usage: comms config get <key>"
@@ -415,6 +421,32 @@ cmd_send() {
   if [ "$to" = all ]; then
     dir="$ROOT/broadcast"
   else
+    to_lower=$(printf '%s' "$to" | tr '[:upper:]' '[:lower:]')
+    resolved_to=""
+    for f in "$ROOT/agents"/*.md; do
+      [ -e "$f" ] || continue
+      bn=$(basename "$f" .md)
+      if [ "$bn" = "$to" ]; then
+        resolved_to="$bn"
+        break
+      elif [ -z "$resolved_to" ] && [ "$(printf '%s' "$bn" | tr '[:upper:]' '[:lower:]')" = "$to_lower" ]; then
+        resolved_to="$bn"
+      fi
+    done
+    if [ -z "$resolved_to" ]; then
+      for f in "$ROOT/agents/retired"/*.md; do
+        [ -e "$f" ] || continue
+        bn=$(basename "$f" .md)
+        if [ "$bn" = "$to" ]; then
+          resolved_to="$bn"
+          break
+        elif [ -z "$resolved_to" ] && [ "$(printf '%s' "$bn" | tr '[:upper:]' '[:lower:]')" = "$to_lower" ]; then
+          resolved_to="$bn"
+        fi
+      done
+    fi
+    [ -n "$resolved_to" ] && to="$resolved_to"
+
     if [ ! -f "$ROOT/agents/$to.md" ]; then
       # Worth telling apart from a typo, because it replaces the quiet failure: before
       # names were retired, mail to an agent that had stopped collecting weeks ago landed
@@ -435,8 +467,9 @@ cmd_send() {
   # same as reading anyone else's, so record it as seen on the way out.
   [ "$to" = all ] && [ -d "$ROOT/inbox/$ME" ] && bmark_seen "$(basename "$f")"
   push
-  if [ -n "${COMMS_NOTIFY:-}" ]; then
-    COMMS_TO="$to" COMMS_FROM="$ME" COMMS_BUS="$BUS" sh -c "$COMMS_NOTIFY" >/dev/null 2>&1 || true
+  NOTIFY="${COMMS_NOTIFY:-$(get_config notify 2>/dev/null || true)}"
+  if [ -n "$NOTIFY" ]; then
+    COMMS_TO="$to" COMMS_FROM="$ME" COMMS_BUS="$BUS" sh -c "$NOTIFY" >/dev/null 2>&1 || true
   fi
   echo "sent to $to"
 }
@@ -509,7 +542,20 @@ bmark_seen() {
 cmd_inbox() {
   need_me
   pull
+  me_lower=$(printf '%s' "$ME" | tr '[:upper:]' '[:lower:]')
   n=$(ls "$ROOT/inbox/$ME"/*.md 2>/dev/null | wc -l | tr -d ' ')
+  for d in "$ROOT/inbox"/*; do
+    [ -d "$d" ] || continue
+    dbase=$(basename "$d")
+    [ "$dbase" != "$ME" ] || continue
+    if [ "$(printf '%s' "$dbase" | tr '[:upper:]' '[:lower:]')" = "$me_lower" ]; then
+      if [ -d "$ROOT/inbox/$ME" ] && [ "$d" -ef "$ROOT/inbox/$ME" ]; then
+        continue
+      fi
+      extra=$(ls "$d"/*.md 2>/dev/null | wc -l | tr -d ' ')
+      n=$((n + extra))
+    fi
+  done
   b=$(bunseen | wc -l | tr -d ' ')
   echo "$n unread, $b broadcast"
 }
@@ -517,6 +563,7 @@ cmd_inbox() {
 cmd_read() {
   need_me
   pull
+  mkdir -p "$ROOT/inbox/$ME/done"
   any=0
   for f in "$ROOT/inbox/$ME"/*.md; do
     [ -e "$f" ] || break
@@ -525,6 +572,32 @@ cmd_read() {
     cat "$f"
     echo
     mv "$f" "$ROOT/inbox/$ME/done/"
+  done
+  me_lower=$(printf '%s' "$ME" | tr '[:upper:]' '[:lower:]')
+  for d in "$ROOT/inbox"/*; do
+    [ -d "$d" ] || continue
+    dbase=$(basename "$d")
+    [ "$dbase" != "$ME" ] || continue
+    if [ "$(printf '%s' "$dbase" | tr '[:upper:]' '[:lower:]')" = "$me_lower" ]; then
+      if [ -d "$ROOT/inbox/$ME" ] && [ "$d" -ef "$ROOT/inbox/$ME" ]; then
+        continue
+      fi
+      for f in "$d"/*.md; do
+        [ -e "$f" ] || break
+        any=1
+        hdr "$f" ""
+        cat "$f"
+        echo
+        mv "$f" "$ROOT/inbox/$ME/done/"
+      done
+      if [ -d "$d/done" ]; then
+        for f in "$d/done"/*.md; do
+          [ -e "$f" ] || break
+          mv "$f" "$ROOT/inbox/$ME/done/"
+        done
+      fi
+      rm -rf "$d"
+    fi
   done
   for f in $(bunseen); do
     if bmuted "$f"; then bmark_seen "$(basename "$f")"; continue; fi

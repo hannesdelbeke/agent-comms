@@ -25,7 +25,10 @@ get_config() {
   [ -f "$CONFIG_FILE" ] || return 1
   key="$1"
   val=$(sed -n "s/^[[:space:]]*$key[[:space:]]*=[[:space:]]*//p" "$CONFIG_FILE" 2>/dev/null | head -n 1 | tr -d '\r')
-  val=$(echo "$val" | sed -e 's/^"//' -e 's/"$//' -e "s/^'//" -e "s/'$//")
+  case "$val" in
+    \"*\") val="${val#\"}"; val="${val%\"}" ;;
+    "'"*"'") val="${val#"'"}" ; val="${val%"'"}" ;;
+  esac
   [ -n "$val" ] || return 1
   echo "$val"
 }
@@ -60,7 +63,13 @@ wake() {
   echo "comms-watch: waking $name ($vendor)"
   case "$vendor" in
     claude) claude -p "$msg" >/dev/null 2>&1 || true ;;
-    gemini) gemini -p "$msg" >/dev/null 2>&1 || true ;;
+    agy|antigravity|gemini)
+      if command -v agy >/dev/null 2>&1; then
+        agy --continue -p "$msg" --dangerously-skip-permissions >/dev/null 2>&1 || true
+      elif command -v gemini >/dev/null 2>&1; then
+        gemini -p "$msg" >/dev/null 2>&1 || true
+      fi
+      ;;
     codex)  codex exec "$msg" >/dev/null 2>&1 || true ;;
     *)      COMMS_ME="$name" COMMS_MSG="$msg" sh -c "$vendor" >/dev/null 2>&1 || true ;;
   esac

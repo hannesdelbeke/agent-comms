@@ -133,6 +133,51 @@ out=$(COMMS_TTL_DAYS=notanumber COMMS_ME=bob $C read >/dev/null 2>&1; echo "rc=$
 [ "$out" = "rc=0" ] && ok "a broken retention setting cannot break read" \
   || bad "read exited nonzero when gc failed ($out)"
 
+# 13. case-insensitive recipient resolution in send
+COMMS_ME=bob $C send Alice "mixed case send" >/dev/null
+[ ! -d "$T/inbox/Alice" ] && [ -d "$T/inbox/alice" ] \
+  && ok "send to alternate case normalizes to registered recipient directory" \
+  || bad "send created duplicate alternate case recipient directory"
+out=$(COMMS_ME=alice $C read); hold_gc
+case "$out" in
+  *"mixed case send"*) ok "recipient received normalized mail" ;;
+  *) bad "recipient missed normalized mail" ;;
+esac
+
+# 14. case-insensitive mailbox cleanup in read
+mkdir -p "$T/inbox/BOB"
+printf 'delivered to uppercase inbox\n' > "$T/inbox/BOB/2026-09-26T12-00-00Z--alice--fff666.md"
+out=$(COMMS_ME=bob $C read); hold_gc
+case "$out" in
+  *"delivered to uppercase inbox"*) ok "read collects mail from alternate-cased inbox" ;;
+  *) bad "read missed mail from alternate-cased inbox" ;;
+esac
+[ ! -d "$T/inbox/BOB" ] && ok "read cleans up alternate-cased inbox directory" \
+  || bad "alternate-cased inbox directory was not removed"
+[ -e "$T/inbox/bob/done/2026-09-26T12-00-00Z--alice--fff666.md" ] \
+  && ok "messages moved to canonical done/ directory" \
+  || bad "messages not moved to canonical done/ directory"
+
+# 15. config notify support
+$C config set notify "printf '%s|%s' \"\$COMMS_TO\" \"\$COMMS_FROM\" > \"$T/notify.txt\"" >/dev/null
+COMMS_ME=alice $C send bob "trigger notify" >/dev/null
+[ -f "$T/notify.txt" ] && [ "$(cat "$T/notify.txt")" = "bob|alice" ] \
+  && ok "config notify triggers with COMMS_TO and COMMS_FROM" \
+  || bad "config notify failed to trigger or bad env"
+
+# 16. send to retired recipient with alternate casing explains itself
+sed 's/^seen: .*/seen: 2026-01-02T03-04-05Z/' "$T/agents/carol.md" > "$T/agents/carol.tmp"
+mv "$T/agents/carol.tmp" "$T/agents/carol.md"
+COMMS_ME=bob $C gc >/dev/null
+if COMMS_ME=bob $C send CAROL "ping retired" >/dev/null 2>"$T/err"; then
+  bad "send to alternate case retired agent silently succeeded"
+else
+  grep -q retired "$T/err" && ok "send to alternate-cased retired agent explains itself" \
+    || bad "send to alternate-cased retired agent failed with the wrong message"
+fi
+
 echo
 [ "$fail" = 0 ] && echo "ALL TESTS PASSED" || echo "SOME TESTS FAILED"
 exit "$fail"
+
+
