@@ -5,7 +5,7 @@
     "hooks": [
       {
         "type": "command",
-        "command": "s=\"$HOME/repos/agent-comms/comms_session.py\"; [ -f \"$s\" ] || exit 0; /usr/bin/python3 \"$s\" --register; exit 0",
+        "command": "s=\"$HOME/repos/agent-comms/comms_session.py\"; [ -f \"$s\" ] || exit 0; exec /usr/bin/python3 \"$s\" --register",
         "timeout": 15,
         "statusMessage": "comms register"
       }
@@ -18,7 +18,7 @@
     "hooks": [
       {
         "type": "command",
-        "command": "s=\"$HOME/repos/agent-comms/comms_session.py\"; [ -f \"$s\" ] || exit 0; /usr/bin/python3 \"$s\" --deliver; exit 0",
+        "command": "s=\"$HOME/repos/agent-comms/comms_session.py\"; [ -f \"$s\" ] || exit 0; exec /usr/bin/python3 \"$s\" --deliver",
         "timeout": 15,
         "statusMessage": "comms deliver"
       }
@@ -29,7 +29,7 @@
     "hooks": [
       {
         "type": "command",
-        "command": "s=\"$HOME/repos/agent-comms/comms_session.py\"; [ -f \"$s\" ] || exit 0; /usr/bin/python3 \"$s\" --refresh; exit 0",
+        "command": "s=\"$HOME/repos/agent-comms/comms_session.py\"; [ -f \"$s\" ] || exit 0; exec /usr/bin/python3 \"$s\" --refresh",
         "timeout": 15,
         "statusMessage": "comms refresh"
       }
@@ -40,7 +40,7 @@
     "hooks": [
       {
         "type": "command",
-        "command": "s=\"$HOME/repos/agent-comms/comms_session.py\"; [ -f \"$s\" ] || exit 0; /usr/bin/python3 \"$s\" --retire; exit 0",
+        "command": "s=\"$HOME/repos/agent-comms/comms_session.py\"; [ -f \"$s\" ] || exit 0; exec /usr/bin/python3 \"$s\" --retire",
         "timeout": 15,
         "statusMessage": "comms retire"
       }

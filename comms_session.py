@@ -197,9 +197,39 @@ def describe(payload: dict) -> str:
     return f"{kind} claude code session in {Path(cwd).name}"
 
 
+KNOWN_SHELLS = {"sh", "bash", "zsh", "dash", "ksh", "csh", "tcsh"}
+
+
 def claude_pid() -> int:
-    """The hook's parent is the Claude Code process that fired it."""
-    return os.getppid()
+    """The hook's parent is the Claude Code process that fired it.
+
+    When hooks run inside a subshell wrapper (`sh -c ...`), os.getppid() captures
+    the ephemeral shell process rather than the persistent caller process (e.g.
+    Claude Code or agent CLI), causing --live to report DEAD as soon as the shell
+    exits. If the parent process basename is a known shell, inspect and traverse
+    up to the grandparent process. Fall back safely to os.getppid() if ps fails
+    or times out.
+    """
+    parent = os.getppid()
+    try:
+        out = subprocess.run(
+            ["ps", "-o", "ppid=,comm=", "-p", str(parent)],
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if out.returncode == 0 and out.stdout.strip():
+            parts = out.stdout.strip().split(None, 1)
+            if len(parts) == 2:
+                gppid_str, comm = parts
+                base = os.path.basename(comm.strip()).lstrip("-").lower()
+                if base in KNOWN_SHELLS:
+                    gppid = int(gppid_str)
+                    if gppid > 0:
+                        return gppid
+    except (OSError, ValueError, subprocess.SubprocessError):
+        pass
+    return parent
 
 
 def parse_registration(path: Path) -> dict[str, str]:
