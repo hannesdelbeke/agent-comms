@@ -167,7 +167,10 @@ TTL="${COMMS_TTL_DAYS:-${CFG_TTL:-7}}"            # broadcasts, and mail already
 MAIL_TTL="${COMMS_MAIL_TTL_DAYS:-${CFG_MAIL_TTL:-30}}"   # mail still uncollected
 PEER_TTL="${COMMS_PEER_TTL_DAYS:-${CFG_PEER_TTL:-14}}"   # a registration nobody refreshes
 
-need_me() { [ -n "$ME" ] || die "set --me <name> or COMMS_ME to your agent name (or: comms config set me <name>)"; }
+need_me() {
+  [ -n "$ME" ] || die "set --me <name> or COMMS_ME to your agent name (or: comms config set me <name>)"
+  ME=$(echo "$ME" | tr '[:upper:]' '[:lower:]')
+}
 
 stamp() { date -u +%Y-%m-%dT%H-%M-%SZ; }
 # bsd and gnu date disagree on relative times, so try one form then the other

@@ -61,6 +61,10 @@ wake() {
   [ -n "$BUS" ] && bus_arg="--bus $BUS "
   msg="You have unread mail on the comms bus. Run \`$BIN ${bus_arg}--me $name read\` and act on what it says."
   echo "comms-watch: waking $name ($vendor)"
+  if [ -n "${COMMS_WATCH_CMD:-}" ]; then
+    COMMS_NAME="$name" COMMS_VENDOR="$vendor" COMMS_MSG="$msg" sh -c "$COMMS_WATCH_CMD" >/dev/null 2>&1 || true
+    return
+  fi
   case "$vendor" in
     claude) claude -p "$msg" >/dev/null 2>&1 || true ;;
     agy|antigravity|gemini)
