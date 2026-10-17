@@ -269,11 +269,14 @@ def waiting_count(root: Path, name: str) -> int:
     return sum(1 for f in inbox.glob("*.md") if f.is_file())
 
 
-def spawn_sync() -> None:
+def spawn_sync(reason: str | None = None) -> None:
     """Detach the git round trip so nothing on the remote can slow a session start."""
     try:
+        cmd = [sys.executable, os.path.abspath(__file__), "--sync"]
+        if reason:
+            cmd.extend(["--reason", reason])
         subprocess.Popen(
-            [sys.executable, os.path.abspath(__file__), "--sync"],
+            cmd,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -333,7 +336,7 @@ def cmd_register(payload: dict, root: Path) -> int:
         except OSError:
             pass
 
-    spawn_sync()
+    spawn_sync("register")
 
     waiting = waiting_count(root, name)
     # stdout on SessionStart is added to the session's context, so this is the one
@@ -387,7 +390,7 @@ def cmd_retire(payload: dict, root: Path) -> int:
     except OSError as exc:
         log(f"could not retire {reg}: {exc}")
         return 0
-    spawn_sync()
+    spawn_sync("retire")
     return 0
 
 
@@ -441,7 +444,7 @@ def cmd_deliver(payload: dict, root: Path) -> int:
         " defaults to no. ---"
     )
     print("\n".join(lines))
-    maybe_sync(root)
+    spawn_sync("deliver")
     return 0
 
 
@@ -464,10 +467,45 @@ def maybe_sync(root: Path, min_interval: int = 60) -> None:
         stamp_file.touch()
     except OSError:
         return
-    spawn_sync()
+    spawn_sync("poll")
 
 
-def cmd_sync(root: Path) -> int:
+def classify_changes(status_output: str) -> tuple[bool, bool]:
+    """Inspect git status --porcelain to separate real message/roster events from heartbeats.
+
+    Returns (has_msg_changes, has_roster_events).
+    - has_msg_changes: True if any changes in inbox/ or broadcast/ (messages sent, delivered, moved to done/).
+    - has_roster_events: True if an agent was added, deleted, or retired. Pure heartbeat updates
+      (seen: / pid: modifications on an existing agent file) return False.
+    """
+    has_msg_changes = False
+    has_roster_events = False
+
+    for line in status_output.splitlines():
+        line = line.strip()
+        if not line:
+            continue
+        parts = line.split(maxsplit=1)
+        if len(parts) < 2:
+            continue
+        code, path = parts[0], parts[1]
+        if " -> " in path:
+            path = path.split(" -> ")[-1]
+        path = path.strip('"')
+
+        if path.startswith("inbox/") or path.startswith("broadcast/"):
+            if not path.endswith(".bcursor") and not path.endswith(".gitkeep"):
+                has_msg_changes = True
+        elif path.startswith("agents/"):
+            if "retired" in path or any(c in code for c in ("?", "A", "D", "R")):
+                has_roster_events = True
+        elif not path.startswith(".git"):
+            has_roster_events = True
+
+    return has_msg_changes, has_roster_events
+
+
+def cmd_sync(root: Path, reason: str = "", force: bool = False) -> int:
     """One git round trip at a time, for the whole machine.
 
     Every session start would otherwise race every other session start on the same
@@ -502,20 +540,40 @@ def cmd_sync(root: Path) -> int:
         if not git("remote").stdout.strip():
             return 0
         try:
-            git("pull", "--rebase", "-q")
-            if not git("status", "--porcelain").stdout.strip():
+            git("pull", "--rebase", "--autostash", "-q")
+            status_out = git("status", "--porcelain").stdout
+            if not status_out.strip():
                 return 0
+
+            has_msg_changes, has_roster_events = classify_changes(status_out)
+            is_deliberate_event = reason in ("register", "retire") or has_roster_events
+
+            # Ephemeral session heartbeats in agents/ are kept local or only synced
+            # when there are actual inbox/broadcast messages, or during explicit
+            # registration/retirement events.
+            if not (has_msg_changes or is_deliberate_event or force):
+                return 0
+
             git("add", "-A")
+            if reason == "register":
+                msg = f"comms: register session on {host_raw()}"
+            elif reason == "retire":
+                msg = f"comms: retire session on {host_raw()}"
+            elif has_msg_changes:
+                msg = f"comms: message delivery on {host_raw()}"
+            else:
+                msg = f"comms: session roster from {host_raw()}"
+
             git(
                 "-c", "user.name=comms-session",
                 "-c", "user.email=comms-session@agent.local",
-                "commit", "-q", "-m", f"comms: session roster from {host_raw()}",
+                "commit", "-q", "-m", msg,
             )
             for _ in range(3):
                 if git("push", "-q").returncode == 0:
                     return 0
-                git("pull", "--rebase", "-q")
-            log("push failed, the roster is local only until the next sync")
+                git("pull", "--rebase", "--autostash", "-q")
+            log("push failed, changes are local only until the next sync")
         except (subprocess.TimeoutExpired, OSError) as exc:
             log(f"sync gave up: {exc}")
     finally:
@@ -559,11 +617,13 @@ def main() -> int:
     mode.add_argument("--deliver", action="store_true", help="UserPromptSubmit: print waiting bus mail into context")
     mode.add_argument("--sync", action="store_true", help="detached: git pull/commit/push the bus")
     mode.add_argument("--live", action="store_true", help="print the roster, marking dead entries")
+    ap.add_argument("--reason", default="", help="reason for sync: register, retire, deliver, poll, etc.")
+    ap.add_argument("--force", action="store_true", help="force commit/push even if only heartbeats changed")
     args = ap.parse_args()
 
     root = bus_root()
     if args.sync:
-        return cmd_sync(root)
+        return cmd_sync(root, reason=args.reason, force=args.force)
     if args.live:
         return cmd_live(root)
 
