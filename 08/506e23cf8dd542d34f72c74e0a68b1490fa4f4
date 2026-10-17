@@ -1,0 +1,14 @@
+comms_session.py
+  h_cc77ab4c551060 272,275-277,279,339,393,447,470,473-508,543-554,556,558-566,570,575-576,620-621,626
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.7.5",
+  "base_commit_sha": "08506e23cf8dd542d34f72c74e0a68b1490fa4f4",
+  "prompts": {},
+  "humans": {
+    "h_cc77ab4c551060": {
+      "author": "Hannes Delbeke <3758308+hannesdelbeke@users.noreply.github.com>"
+    }
+  }
+}
