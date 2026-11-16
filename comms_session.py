@@ -197,9 +197,44 @@ def describe(payload: dict) -> str:
     return f"{kind} claude code session in {Path(cwd).name}"
 
 
+def _ps_field(pid: int, field: str) -> str:
+    """One `ps` field for a pid, empty when ps is unavailable or the pid is gone."""
+    try:
+        out = subprocess.run(
+            ["ps", "-o", f"{field}=", "-p", str(pid)],
+            capture_output=True,
+            text=True,
+            timeout=2,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return out.stdout.strip()
+
+
 def claude_pid() -> int:
-    """The hook's parent is the Claude Code process that fired it."""
-    return os.getppid()
+    """The Claude Code process, found by walking up the ancestry from this hook.
+
+    `os.getppid()` is not it, which is the bug this replaces. Every hook command here
+    is a compound shell string, so Claude Code spawns a shell, the shell spawns this
+    interpreter, and the shell exits the moment the hook returns. Recording the parent
+    therefore records a pid that is already dead by the time anyone reads it, and
+    `--live` went on to report every hook-registered session as `DEAD, process gone`,
+    including the session asking the question.
+
+    Return 0 when the real process cannot be identified, so a registration carries no
+    pid at all and reads as `no pid` rather than as a session that has died.
+    """
+    pid = os.getppid()
+    for _ in range(8):
+        if pid <= 1:
+            break
+        if "claude" in _ps_field(pid, "command").lower():
+            return pid
+        parent = _ps_field(pid, "ppid")
+        if not parent.isdigit():
+            break
+        pid = int(parent)
+    return 0
 
 
 def parse_registration(path: Path) -> dict[str, str]:
@@ -275,9 +310,11 @@ def cmd_register(payload: dict, root: Path) -> int:
         f"host: {host_raw()}",
         f"cwd: {payload.get('cwd') or os.getcwd()}",
         f"seen: {stamp()}",
-        f"pid: {claude_pid()}",
-        f"session: {session_id(payload)}",
     ]
+    pid = claude_pid()
+    if pid:
+        body.append(f"pid: {pid}")
+    body.append(f"session: {session_id(payload)}")
     try:
         reg.write_text("\n".join(body) + "\n", encoding="utf-8")
     except OSError as exc:
@@ -313,7 +350,11 @@ def cmd_refresh(payload: dict, root: Path) -> int:
         return cmd_register(payload, root)
     fields = parse_registration(reg)
     fields["seen"] = stamp()
-    fields["pid"] = str(claude_pid())
+    pid = claude_pid()
+    if pid:
+        fields["pid"] = str(pid)
+    else:
+        fields.pop("pid", None)
     order = ["name", "role", "host", "cwd", "seen", "pid", "session"]
     lines = [f"{k}: {fields[k]}" for k in order if k in fields]
     lines += [f"{k}: {v}" for k, v in fields.items() if k not in order]

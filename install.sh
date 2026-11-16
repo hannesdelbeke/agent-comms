@@ -40,11 +40,13 @@ if [ -n "$BUS" ] && [ "$BUS" != "--hooks" ]; then
   echo "✓ Configured default_bus=$BUS"
 fi
 
-# 4. Generate/update repo comms_session_hooks.json with actual repo path
-sed -i -e "s|s=\"[^\"]*comms_session\.py\"|s=\"$REPO_DIR/comms_session.py\"|g" "$REPO_DIR/comms_session_hooks.json"
-echo "✓ Configured comms_session_hooks.json target to $REPO_DIR/comms_session.py"
-
-# 5. Optional hook installation into ~/.claude/settings.json
+# 4. Optional hook installation into ~/.claude/settings.json
+#
+# The repo's comms_session_hooks.json is left untouched on purpose. It used to be
+# rewritten in place with `sed -i`, which dirtied a tracked file on every install and
+# then made the next `git pull --ff-only` refuse; the path is substituted in memory
+# below instead. `sed -i` also takes a mandatory argument on BSD, so `-i -e` wrote
+# backup files named `...json-e` on macOS rather than editing in place.
 INSTALL_HOOKS=0
 for arg in "$@"; do
   [ "$arg" = "--hooks" ] && INSTALL_HOOKS=1
@@ -54,6 +56,7 @@ if [ "$INSTALL_HOOKS" -eq 1 ]; then
   python3 - <<EOF
 import json
 import pathlib
+import re
 import sys
 
 settings_path = pathlib.Path.home() / ".claude/settings.json"
@@ -75,20 +78,61 @@ else:
 
 hooks_src = json.loads(hooks_path.read_text(encoding="utf-8"))
 
+# Point every hook command at this checkout, in memory rather than on disk.
+repo_dir = "$REPO_DIR"
+script = repo_dir + "/comms_session.py"
+
+# Claude Code's schema is settings["hooks"][<event>] -> list of matcher groups, each
+# {"hooks": [ {type, command, ...} ]}. Writing settings[<event>] instead, which is what
+# this installer used to do, puts a well-formed block at a key Claude Code never reads:
+# the install reports success, nothing errors, and the bus silently never registers or
+# delivers. Merge into the nested list, per matcher group.
+settings_hooks = data.setdefault("hooks", {})
+installed = 0
+
 for event in ("SessionStart", "UserPromptSubmit", "PreCompact", "SessionEnd"):
     if event not in hooks_src:
         continue
-    target_event = data.setdefault(event, {})
-    target_hooks = target_event.setdefault("hooks", [])
-    src_hook = hooks_src[event]["hooks"][0]
-    
-    # Check if identical command already exists
-    exists = any(h.get("command") == src_hook.get("command") for h in target_hooks)
-    if not exists:
-        target_hooks.append(src_hook)
+    src_group = hooks_src[event]
+    if not isinstance(src_group, dict) or not src_group.get("hooks"):
+        continue
+    src_hook = dict(src_group["hooks"][0])
+    src_hook["command"] = re.sub(
+        r's="[^"]*comms_session\.py"', 's="%s"' % script, src_hook["command"]
+    )
+
+    groups = settings_hooks.setdefault(event, [])
+    if not isinstance(groups, list):
+        print(f"Warning: settings hooks.{event} is not a list, skipping", file=sys.stderr)
+        continue
+
+    # Dedupe on the command across every existing group, so re-running is idempotent
+    # and an older comms hook pointing at a different checkout is replaced rather than
+    # left to register the same session twice.
+    already = False
+    for group in groups:
+        for hook in list(group.get("hooks", []) if isinstance(group, dict) else []):
+            cmd = hook.get("command", "")
+            if "comms_session.py" not in cmd:
+                continue
+            if cmd == src_hook["command"]:
+                already = True
+            else:
+                group["hooks"].remove(hook)
+
+    if not already:
+        groups.append({"hooks": [src_hook]})
+        installed += 1
+
+# Drop any matcher group left with no hooks by the replacement above.
+for event, groups in list(settings_hooks.items()):
+    if isinstance(groups, list):
+        settings_hooks[event] = [
+            g for g in groups if not (isinstance(g, dict) and g.get("hooks") == [])
+        ]
 
 settings_path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-print(f"✓ Installed lifecycle hooks into {settings_path}")
+print(f"✓ Installed {installed} lifecycle hook(s) into {settings_path} under hooks.*")
 EOF
 fi
 
